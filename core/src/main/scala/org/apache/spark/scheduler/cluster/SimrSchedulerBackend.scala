@@ -17,18 +17,18 @@
 
 package org.apache.spark.scheduler.cluster
 
-import org.apache.hadoop.fs.{Path, FileSystem}
+import org.apache.hadoop.fs.{FileSystem, Path}
 
-import org.apache.spark.{Logging, SparkContext, SparkEnv}
+import org.apache.spark.{Logging, SparkContext}
 import org.apache.spark.deploy.SparkHadoopUtil
+import org.apache.spark.rpc.RpcEndpointAddress
 import org.apache.spark.scheduler.TaskSchedulerImpl
-import org.apache.spark.util.AkkaUtils
 
 private[spark] class SimrSchedulerBackend(
     scheduler: TaskSchedulerImpl,
     sc: SparkContext,
     driverFilePath: String)
-  extends CoarseGrainedSchedulerBackend(scheduler, sc.env.actorSystem)
+  extends CoarseGrainedSchedulerBackend(scheduler, sc.env.rpcEnv)
   with Logging {
 
   val tmpPath = new Path(driverFilePath + "_tmp")
@@ -39,12 +39,10 @@ private[spark] class SimrSchedulerBackend(
   override def start() {
     super.start()
 
-    val driverUrl = AkkaUtils.address(
-      AkkaUtils.protocol(actorSystem),
-      SparkEnv.driverActorSystemName,
+    val driverUrl = RpcEndpointAddress(
       sc.conf.get("spark.driver.host"),
-      sc.conf.get("spark.driver.port"),
-      CoarseGrainedSchedulerBackend.ACTOR_NAME)
+      sc.conf.get("spark.driver.port").toInt,
+      CoarseGrainedSchedulerBackend.ENDPOINT_NAME).toString
 
     val conf = SparkHadoopUtil.get.newConfiguration(sc.conf)
     val fs = FileSystem.get(conf)
@@ -68,7 +66,9 @@ private[spark] class SimrSchedulerBackend(
   override def stop() {
     val conf = SparkHadoopUtil.get.newConfiguration(sc.conf)
     val fs = FileSystem.get(conf)
-    fs.delete(new Path(driverFilePath), false)
+    if (!fs.delete(new Path(driverFilePath), false)) {
+      logWarning(s"error deleting ${driverFilePath}")
+    }
     super.stop()
   }
 

@@ -17,23 +17,32 @@
 
 package org.apache.spark.sql.execution
 
-import org.apache.spark.sql.Row
-import org.apache.spark.sql.catalyst.ScalaReflection
-import org.apache.spark.sql.catalyst.expressions.Attribute
+import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.expressions.{Attribute, UnsafeProjection}
 
 
 /**
  * Physical plan node for scanning data from a local collection.
  */
-case class LocalTableScan(output: Seq[Attribute], rows: Seq[Row]) extends LeafNode {
+private[sql] case class LocalTableScan(
+    output: Seq[Attribute],
+    rows: Seq[InternalRow]) extends LeafNode {
 
-  private lazy val rdd = sqlContext.sparkContext.parallelize(rows)
+  private val unsafeRows: Array[InternalRow] = {
+    val proj = UnsafeProjection.create(output, output)
+    rows.map(r => proj(r).copy()).toArray
+  }
 
-  override def execute() = rdd
+  private lazy val rdd = sqlContext.sparkContext.parallelize(unsafeRows)
 
-  override def executeCollect() =
-    rows.map(ScalaReflection.convertRowToScala(_, schema)).toArray
+  protected override def doExecute(): RDD[InternalRow] = rdd
 
-  override def executeTake(limit: Int) =
-    rows.map(ScalaReflection.convertRowToScala(_, schema)).take(limit).toArray
+  override def executeCollect(): Array[InternalRow] = {
+    unsafeRows
+  }
+
+  override def executeTake(limit: Int): Array[InternalRow] = {
+    unsafeRows.take(limit)
+  }
 }

@@ -17,15 +17,15 @@
 
 package org.apache.spark.mllib.stat.test
 
+import scala.collection.mutable
+
 import breeze.linalg.{DenseMatrix => BDM}
 import org.apache.commons.math3.distribution.ChiSquaredDistribution
 
-import org.apache.spark.{SparkException, Logging}
+import org.apache.spark.{Logging, SparkException}
 import org.apache.spark.mllib.linalg.{Matrices, Matrix, Vector, Vectors}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
-
-import scala.collection.mutable
 
 /**
  * Conduct the chi-squared test for the input RDDs using the specified method.
@@ -196,7 +196,7 @@ private[stat] object ChiSqTest extends Logging {
    * Pearson's independence test on the input contingency matrix.
    * TODO: optimize for SparseMatrix when it becomes supported.
    */
-  def chiSquaredMatrix(counts: Matrix, methodName:String = PEARSON.name): ChiSqTestResult = {
+  def chiSquaredMatrix(counts: Matrix, methodName: String = PEARSON.name): ChiSqTestResult = {
     val method = methodFromString(methodName)
     val numRows = counts.numRows
     val numCols = counts.numCols
@@ -205,8 +205,10 @@ private[stat] object ChiSqTest extends Logging {
     val colSums = new Array[Double](numCols)
     val rowSums = new Array[Double](numRows)
     val colMajorArr = counts.toArray
+    val colMajorArrLen = colMajorArr.length
+
     var i = 0
-    while (i < colMajorArr.size) {
+    while (i < colMajorArrLen) {
       val elem = colMajorArr(i)
       if (elem < 0.0) {
         throw new IllegalArgumentException("Contingency table cannot contain negative entries.")
@@ -220,7 +222,7 @@ private[stat] object ChiSqTest extends Logging {
     // second pass to collect statistic
     var statistic = 0.0
     var j = 0
-    while (j < colMajorArr.size) {
+    while (j < colMajorArrLen) {
       val col = j / numRows
       val colSum = colSums(col)
       if (colSum == 0.0) {

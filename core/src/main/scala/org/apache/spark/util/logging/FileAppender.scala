@@ -29,7 +29,6 @@ private[spark] class FileAppender(inputStream: InputStream, file: File, bufferSi
   extends Logging {
   @volatile private var outputStream: FileOutputStream = null
   @volatile private var markedForStop = false     // has the appender been asked to stopped
-  @volatile private var stopped = false           // has the appender stopped
 
   // Thread that reads the input stream and writes to file
   private val writingThread = new Thread("File appending thread for " + file) {
@@ -47,11 +46,7 @@ private[spark] class FileAppender(inputStream: InputStream, file: File, bufferSi
    * or because of any error in appending
    */
   def awaitTermination() {
-    synchronized {
-      if (!stopped) {
-        wait()
-      }
-    }
+    writingThread.join()
   }
 
   /** Stop the appender */
@@ -77,10 +72,6 @@ private[spark] class FileAppender(inputStream: InputStream, file: File, bufferSi
         logError(s"Error writing stream to file $file", e)
     } finally {
       closeFile()
-      synchronized {
-        stopped = true
-        notifyAll()
-      }
     }
   }
 
@@ -121,7 +112,7 @@ private[spark] object FileAppender extends Logging {
     val rollingSizeBytes = conf.get(SIZE_PROPERTY, STRATEGY_DEFAULT)
     val rollingInterval = conf.get(INTERVAL_PROPERTY, INTERVAL_DEFAULT)
 
-    def createTimeBasedAppender() = {
+    def createTimeBasedAppender(): FileAppender = {
       val validatedParams: Option[(Long, String)] = rollingInterval match {
         case "daily" =>
           logInfo(s"Rolling executor logs enabled for $file with daily rolling")
@@ -149,7 +140,7 @@ private[spark] object FileAppender extends Logging {
       }
     }
 
-    def createSizeBasedAppender() = {
+    def createSizeBasedAppender(): FileAppender = {
       rollingSizeBytes match {
         case IntParam(bytes) =>
           logInfo(s"Rolling executor logs enabled for $file with rolling every $bytes bytes")

@@ -17,7 +17,7 @@
 
 package org.apache.spark
 
-import _root_.io.netty.util.internal.logging.{Slf4JLoggerFactory, InternalLoggerFactory}
+import _root_.io.netty.util.internal.logging.{InternalLoggerFactory, Slf4JLoggerFactory}
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.BeforeAndAfterEach
 import org.scalatest.Suite
@@ -28,16 +28,19 @@ trait LocalSparkContext extends BeforeAndAfterEach with BeforeAndAfterAll { self
   @transient var sc: SparkContext = _
 
   override def beforeAll() {
-    InternalLoggerFactory.setDefaultFactory(new Slf4JLoggerFactory())
     super.beforeAll()
+    InternalLoggerFactory.setDefaultFactory(new Slf4JLoggerFactory())
   }
 
   override def afterEach() {
-    resetSparkContext()
-    super.afterEach()
+    try {
+      resetSparkContext()
+    } finally {
+      super.afterEach()
+    }
   }
 
-  def resetSparkContext() = {
+  def resetSparkContext(): Unit = {
     LocalSparkContext.stop(sc)
     sc = null
   }
@@ -54,7 +57,7 @@ object LocalSparkContext {
   }
 
   /** Runs `f` by passing in `sc` and ensures that `sc` is stopped. */
-  def withSpark[T](sc: SparkContext)(f: SparkContext => T) = {
+  def withSpark[T](sc: SparkContext)(f: SparkContext => T): T = {
     try {
       f(sc)
     } finally {

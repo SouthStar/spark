@@ -17,14 +17,13 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
+/* Implicit conversions */
+import org.apache.spark.sql.catalyst.dsl.expressions._
+import org.apache.spark.sql.catalyst.dsl.plans._
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.catalyst.rules._
-
-/* Implicit conversions */
-import org.apache.spark.sql.catalyst.dsl.expressions._
-import org.apache.spark.sql.catalyst.dsl.plans._
 
 class SimplifyCaseConversionExpressionsSuite extends PlanTest {
 
@@ -41,7 +40,7 @@ class SimplifyCaseConversionExpressionsSuite extends PlanTest {
       testRelation
         .select(Upper(Upper('a)) as 'u)
 
-    val optimized = Optimize(originalQuery.analyze)
+    val optimized = Optimize.execute(originalQuery.analyze)
     val correctAnswer =
       testRelation
         .select(Upper('a) as 'u)
@@ -55,7 +54,7 @@ class SimplifyCaseConversionExpressionsSuite extends PlanTest {
       testRelation
         .select(Upper(Lower('a)) as 'u)
 
-    val optimized = Optimize(originalQuery.analyze)
+    val optimized = Optimize.execute(originalQuery.analyze)
     val correctAnswer =
       testRelation
         .select(Upper('a) as 'u)
@@ -69,7 +68,7 @@ class SimplifyCaseConversionExpressionsSuite extends PlanTest {
       testRelation
         .select(Lower(Upper('a)) as 'l)
 
-    val optimized = Optimize(originalQuery.analyze)
+    val optimized = Optimize.execute(originalQuery.analyze)
     val correctAnswer = testRelation
       .select(Lower('a) as 'l)
       .analyze
@@ -82,7 +81,7 @@ class SimplifyCaseConversionExpressionsSuite extends PlanTest {
       testRelation
         .select(Lower(Lower('a)) as 'l)
 
-    val optimized = Optimize(originalQuery.analyze)
+    val optimized = Optimize.execute(originalQuery.analyze)
     val correctAnswer = testRelation
       .select(Lower('a) as 'l)
       .analyze

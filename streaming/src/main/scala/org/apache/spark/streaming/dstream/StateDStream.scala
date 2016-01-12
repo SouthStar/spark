@@ -17,13 +17,13 @@
 
 package org.apache.spark.streaming.dstream
 
-import org.apache.spark.rdd.RDD
+import scala.reflect.ClassTag
+
 import org.apache.spark.Partitioner
 import org.apache.spark.SparkContext._
+import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.streaming.{Duration, Time}
-
-import scala.reflect.ClassTag
 
 private[streaming]
 class StateDStream[K: ClassTag, V: ClassTag, S: ClassTag](
@@ -36,7 +36,7 @@ class StateDStream[K: ClassTag, V: ClassTag, S: ClassTag](
 
   super.persist(StorageLevel.MEMORY_ONLY_SER)
 
-  override def dependencies = List(parent)
+  override def dependencies: List[DStream[_]] = List(parent)
 
   override def slideDuration: Duration = parent.slideDuration
 
@@ -51,7 +51,7 @@ class StateDStream[K: ClassTag, V: ClassTag, S: ClassTag](
     val finalFunc = (iterator: Iterator[(K, (Iterable[V], Iterable[S]))]) => {
       val i = iterator.map(t => {
         val itr = t._2._2.iterator
-        val headOption = if(itr.hasNext) Some(itr.next) else None
+        val headOption = if (itr.hasNext) Some(itr.next()) else None
         (t._1, t._2._1.toSeq, headOption)
       })
       updateFuncLocal(i)

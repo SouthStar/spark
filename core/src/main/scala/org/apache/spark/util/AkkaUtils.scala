@@ -17,18 +17,13 @@
 
 package org.apache.spark.util
 
-import scala.collection.JavaConversions.mapAsJavaMap
-import scala.concurrent.Await
-import scala.concurrent.duration.{Duration, FiniteDuration}
-import scala.util.Try
+import scala.collection.JavaConverters._
 
-import akka.actor.{ActorRef, ActorSystem, ExtendedActorSystem}
-import akka.pattern.ask
-
+import akka.actor.{ActorSystem, ExtendedActorSystem}
 import com.typesafe.config.ConfigFactory
 import org.apache.log4j.{Level, Logger}
 
-import org.apache.spark.{Logging, SecurityManager, SparkConf, SparkEnv, SparkException}
+import org.apache.spark.{Logging, SecurityManager, SparkConf}
 
 /**
  * Various utility classes for working with Akka.
@@ -64,9 +59,10 @@ private[spark] object AkkaUtils extends Logging {
       conf: SparkConf,
       securityManager: SecurityManager): (ActorSystem, Int) = {
 
-    val akkaThreads   = conf.getInt("spark.akka.threads", 4)
+    val akkaThreads = conf.getInt("spark.akka.threads", 4)
     val akkaBatchSize = conf.getInt("spark.akka.batchSize", 15)
-    val akkaTimeout = conf.getInt("spark.akka.timeout", conf.getInt("spark.network.timeout", 120))
+    val akkaTimeoutS = conf.getTimeAsSeconds("spark.akka.timeout",
+      conf.get("spark.network.timeout", "120s"))
     val akkaFrameSize = maxFrameSizeBytes(conf)
     val akkaLogLifecycleEvents = conf.getBoolean("spark.akka.logLifecycleEvents", false)
     val lifecycleEvents = if (akkaLogLifecycleEvents) "on" else "off"
@@ -78,8 +74,8 @@ private[spark] object AkkaUtils extends Logging {
 
     val logAkkaConfig = if (conf.getBoolean("spark.akka.logAkkaConfig", false)) "on" else "off"
 
-    val akkaHeartBeatPauses = conf.getInt("spark.akka.heartbeat.pauses", 6000)
-    val akkaHeartBeatInterval = conf.getInt("spark.akka.heartbeat.interval", 1000)
+    val akkaHeartBeatPausesS = conf.getTimeAsSeconds("spark.akka.heartbeat.pauses", "6000s")
+    val akkaHeartBeatIntervalS = conf.getTimeAsSeconds("spark.akka.heartbeat.interval", "1000s")
 
     val secretKey = securityManager.getSecretKey()
     val isAuthOn = securityManager.isAuthenticationEnabled()
@@ -93,7 +89,7 @@ private[spark] object AkkaUtils extends Logging {
     val akkaSslConfig = securityManager.akkaSSLOptions.createAkkaConfig
         .getOrElse(ConfigFactory.empty())
 
-    val akkaConf = ConfigFactory.parseMap(conf.getAkkaConf.toMap[String, String])
+    val akkaConf = ConfigFactory.parseMap(conf.getAkkaConf.toMap.asJava)
       .withFallback(akkaSslConfig).withFallback(ConfigFactory.parseString(
       s"""
       |akka.daemonic = on
@@ -102,14 +98,14 @@ private[spark] object AkkaUtils extends Logging {
       |akka.jvm-exit-on-fatal-error = off
       |akka.remote.require-cookie = "$requireCookie"
       |akka.remote.secure-cookie = "$secureCookie"
-      |akka.remote.transport-failure-detector.heartbeat-interval = $akkaHeartBeatInterval s
-      |akka.remote.transport-failure-detector.acceptable-heartbeat-pause = $akkaHeartBeatPauses s
+      |akka.remote.transport-failure-detector.heartbeat-interval = $akkaHeartBeatIntervalS s
+      |akka.remote.transport-failure-detector.acceptable-heartbeat-pause = $akkaHeartBeatPausesS s
       |akka.actor.provider = "akka.remote.RemoteActorRefProvider"
       |akka.remote.netty.tcp.transport-class = "akka.remote.transport.netty.NettyTransport"
       |akka.remote.netty.tcp.hostname = "$host"
       |akka.remote.netty.tcp.port = $port
       |akka.remote.netty.tcp.tcp-nodelay = on
-      |akka.remote.netty.tcp.connection-timeout = $akkaTimeout s
+      |akka.remote.netty.tcp.connection-timeout = $akkaTimeoutS s
       |akka.remote.netty.tcp.maximum-frame-size = ${akkaFrameSize}B
       |akka.remote.netty.tcp.execution-pool-size = $akkaThreads
       |akka.actor.default-dispatcher.throughput = $akkaBatchSize
@@ -125,21 +121,11 @@ private[spark] object AkkaUtils extends Logging {
     (actorSystem, boundPort)
   }
 
-  /** Returns the default Spark timeout to use for Akka ask operations. */
-  def askTimeout(conf: SparkConf): FiniteDuration = {
-    Duration.create(conf.getLong("spark.akka.askTimeout", 30), "seconds")
-  }
-
-  /** Returns the default Spark timeout to use for Akka remote actor lookup. */
-  def lookupTimeout(conf: SparkConf): FiniteDuration = {
-    Duration.create(conf.getLong("spark.akka.lookupTimeout", 30), "seconds")
-  }
-
   private val AKKA_MAX_FRAME_SIZE_IN_MB = Int.MaxValue / 1024 / 1024
 
   /** Returns the configured max frame size for Akka messages in bytes. */
   def maxFrameSizeBytes(conf: SparkConf): Int = {
-    val frameSizeInMB = conf.getInt("spark.akka.frameSize", 10)
+    val frameSizeInMB = conf.getInt("spark.akka.frameSize", 128)
     if (frameSizeInMB > AKKA_MAX_FRAME_SIZE_IN_MB) {
       throw new IllegalArgumentException(
         s"spark.akka.frameSize should not be greater than $AKKA_MAX_FRAME_SIZE_IN_MB MB")
@@ -149,113 +135,5 @@ private[spark] object AkkaUtils extends Logging {
 
   /** Space reserved for extra data in an Akka message besides serialized task or task result. */
   val reservedSizeBytes = 200 * 1024
-
-  /** Returns the configured number of times to retry connecting */
-  def numRetries(conf: SparkConf): Int = {
-    conf.getInt("spark.akka.num.retries", 3)
-  }
-
-  /** Returns the configured number of milliseconds to wait on each retry */
-  def retryWaitMs(conf: SparkConf): Int = {
-    conf.getInt("spark.akka.retry.wait", 3000)
-  }
-
-  /**
-   * Send a message to the given actor and get its result within a default timeout, or
-   * throw a SparkException if this fails.
-   */
-  def askWithReply[T](
-      message: Any,
-      actor: ActorRef,
-      timeout: FiniteDuration): T = {
-    askWithReply[T](message, actor, maxAttempts = 1, retryInterval = Int.MaxValue, timeout)
-  }
-
-  /**
-   * Send a message to the given actor and get its result within a default timeout, or
-   * throw a SparkException if this fails even after the specified number of retries.
-   */
-  def askWithReply[T](
-      message: Any,
-      actor: ActorRef,
-      maxAttempts: Int,
-      retryInterval: Int,
-      timeout: FiniteDuration): T = {
-    // TODO: Consider removing multiple attempts
-    if (actor == null) {
-      throw new SparkException(s"Error sending message [message = $message]" +
-        " as actor is null ")
-    }
-    var attempts = 0
-    var lastException: Exception = null
-    while (attempts < maxAttempts) {
-      attempts += 1
-      try {
-        val future = actor.ask(message)(timeout)
-        val result = Await.result(future, timeout)
-        if (result == null) {
-          throw new SparkException("Actor returned null")
-        }
-        return result.asInstanceOf[T]
-      } catch {
-        case ie: InterruptedException => throw ie
-        case e: Exception =>
-          lastException = e
-          logWarning(s"Error sending message [message = $message] in $attempts attempts", e)
-      }
-      Thread.sleep(retryInterval)
-    }
-
-    throw new SparkException(
-      s"Error sending message [message = $message]", lastException)
-  }
-
-  def makeDriverRef(name: String, conf: SparkConf, actorSystem: ActorSystem): ActorRef = {
-    val driverActorSystemName = SparkEnv.driverActorSystemName
-    val driverHost: String = conf.get("spark.driver.host", "localhost")
-    val driverPort: Int = conf.getInt("spark.driver.port", 7077)
-    Utils.checkHost(driverHost, "Expected hostname")
-    val url = address(protocol(actorSystem), driverActorSystemName, driverHost, driverPort, name)
-    val timeout = AkkaUtils.lookupTimeout(conf)
-    logInfo(s"Connecting to $name: $url")
-    Await.result(actorSystem.actorSelection(url).resolveOne(timeout), timeout)
-  }
-
-  def makeExecutorRef(
-      name: String,
-      conf: SparkConf,
-      host: String,
-      port: Int,
-      actorSystem: ActorSystem): ActorRef = {
-    val executorActorSystemName = SparkEnv.executorActorSystemName
-    Utils.checkHost(host, "Expected hostname")
-    val url = address(protocol(actorSystem), executorActorSystemName, host, port, name)
-    val timeout = AkkaUtils.lookupTimeout(conf)
-    logInfo(s"Connecting to $name: $url")
-    Await.result(actorSystem.actorSelection(url).resolveOne(timeout), timeout)
-  }
-
-  def protocol(actorSystem: ActorSystem): String = {
-    val akkaConf = actorSystem.settings.config
-    val sslProp = "akka.remote.netty.tcp.enable-ssl"
-    protocol(akkaConf.hasPath(sslProp) && akkaConf.getBoolean(sslProp))
-  }
-
-  def protocol(ssl: Boolean = false): String = {
-    if (ssl) {
-      "akka.ssl.tcp"
-    } else {
-      "akka.tcp"
-    }
-  }
-
-  def address(
-      protocol: String,
-      systemName: String,
-      host: String,
-      port: Any,
-      actorName: String): String = {
-    s"$protocol://$systemName@$host:$port/user/$actorName"
-  }
 
 }
